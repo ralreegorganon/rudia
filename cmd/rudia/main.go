@@ -8,7 +8,6 @@ import (
 )
 
 var relayPort = flag.String("port", "32779", "TCP port to relay to")
-var upstream = flag.String("upstream", "localhost:32778", "Upstream address to relay from in host:port format")
 
 func init() {
 	log.SetLevel(log.DebugLevel)
@@ -16,8 +15,11 @@ func init() {
 
 func main() {
 	flag.Parse()
-
 	r := rudia.NewRepeater()
-	r.Proxy(*upstream)
+
+	for _, arg := range flag.Args() {
+		r.Proxy(arg)
+	}
+
 	r.ListenAndAccept(":" + *relayPort)
 }
