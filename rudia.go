@@ -11,26 +11,28 @@ import (
 )
 
 type client struct {
-	incoming   chan string
-	outgoing   chan string
-	dead       chan bool
-	isUpstream bool
-	conn       net.Conn
-	reader     *bufio.Reader
-	writer     *bufio.Writer
+	incoming    chan string
+	outgoing    chan string
+	dead        chan bool
+	isUpstream  bool
+	conn        net.Conn
+	reader      *bufio.Reader
+	writer      *bufio.Writer
+	idleTimeout time.Duration
 }
 
-func newClient(conn net.Conn, isUpstream bool) *client {
+func newClient(conn net.Conn, isUpstream bool, idleTimeout time.Duration) *client {
 	r := bufio.NewReader(conn)
 	w := bufio.NewWriter(conn)
 	c := &client{
-		incoming:   make(chan string),
-		outgoing:   make(chan string),
-		dead:       make(chan bool),
-		isUpstream: isUpstream,
-		conn:       conn,
-		reader:     r,
-		writer:     w,
+		incoming:    make(chan string),
+		outgoing:    make(chan string),
+		dead:        make(chan bool),
+		isUpstream:  isUpstream,
+		conn:        conn,
+		reader:      r,
+		writer:      w,
+		idleTimeout: idleTimeout,
 	}
 	c.listen()
 	return c
@@ -39,7 +41,7 @@ func newClient(conn net.Conn, isUpstream bool) *client {
 func (c *client) read() {
 	for {
 		if c.isUpstream {
-			c.conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+			c.conn.SetReadDeadline(time.Now().Add(c.idleTimeout))
 		}
 		line, err := c.reader.ReadString('\n')
 		if err != nil {
@@ -83,6 +85,11 @@ func (c *client) listen() {
 	go c.write()
 }
 
+type RepeaterOptions struct {
+	RetryInterval time.Duration
+	IdleTimeout   time.Duration
+}
+
 // A Repeater connects to an upstream TCP endpoint and relays the messages
 // it receives to all connected clients.
 type Repeater struct {
@@ -93,11 +100,12 @@ type Repeater struct {
 	outgoing        chan string
 	incoming        chan string
 	upstreamFault   chan bool
+	options         *RepeaterOptions
 }
 
 // NewRepeater creates a new Repeater and starts listening for client
 // connections.
-func NewRepeater() *Repeater {
+func NewRepeater(options *RepeaterOptions) *Repeater {
 	r := &Repeater{
 		relayClients:    make(map[string]*client),
 		upstreamClients: make(map[string]*client),
@@ -106,12 +114,11 @@ func NewRepeater() *Repeater {
 		incoming:        make(chan string),
 		outgoing:        make(chan string),
 		upstreamFault:   make(chan bool),
+		options:         options,
 	}
 	r.listen()
 	return r
 }
-
-var retryInterval = 10 * time.Second
 
 // Proxy connects to the specified TCP address and relays all received
 // messages to connected clients. If the connection to the specified
@@ -133,10 +140,10 @@ func (r *Repeater) Proxy(address string) {
 
 				log.WithFields(log.Fields{
 					"upstream": address,
-					"sleep":    retryInterval,
-				}).Error("Sleeping before retrying upstream")
+					"sleep":    r.options.RetryInterval,
+				}).Info("Sleeping before retrying upstream")
 
-				time.Sleep(retryInterval)
+				time.Sleep(r.options.RetryInterval)
 				continue
 			}
 			r.upstreamJoins <- c
@@ -188,18 +195,20 @@ func (r *Repeater) join(conn net.Conn, clients map[string]*client, isUpstream bo
 		"isUpstream": isUpstream,
 	}).Info("Creating client")
 
-	c := newClient(conn, isUpstream)
+	c := newClient(conn, isUpstream, r.options.IdleTimeout)
 	clients[conn.RemoteAddr().String()] = c
 	go func() {
 		for {
 			select {
 			case inc := <-c.incoming:
-				r.incoming <- inc
+				if isUpstream {
+					r.incoming <- inc
+				}
 			case _ = <-c.dead:
 				log.WithFields(log.Fields{
 					"client":     c.conn.RemoteAddr(),
 					"isUpstream": isUpstream,
-				}).Info("Dead client")
+				}).Warn("Dead client")
 
 				deadRemote := c.conn.RemoteAddr().String()
 				delete(clients, deadRemote)
