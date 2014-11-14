@@ -4,30 +4,33 @@ package rudia
 
 import (
 	"bufio"
-	"log"
 	"net"
 	"time"
+
+	log "github.com/Sirupsen/logrus"
 )
 
 type client struct {
-	incoming chan string
-	outgoing chan string
-	dead     chan bool
-	conn     net.Conn
-	reader   *bufio.Reader
-	writer   *bufio.Writer
+	incoming   chan string
+	outgoing   chan string
+	dead       chan bool
+	isUpstream bool
+	conn       net.Conn
+	reader     *bufio.Reader
+	writer     *bufio.Writer
 }
 
-func newClient(conn net.Conn) *client {
+func newClient(conn net.Conn, isUpstream bool) *client {
 	r := bufio.NewReader(conn)
 	w := bufio.NewWriter(conn)
 	c := &client{
-		incoming: make(chan string),
-		outgoing: make(chan string),
-		dead:     make(chan bool),
-		conn:     conn,
-		reader:   r,
-		writer:   w,
+		incoming:   make(chan string),
+		outgoing:   make(chan string),
+		dead:       make(chan bool),
+		isUpstream: isUpstream,
+		conn:       conn,
+		reader:     r,
+		writer:     w,
 	}
 	c.listen()
 	return c
@@ -35,9 +38,16 @@ func newClient(conn net.Conn) *client {
 
 func (c *client) read() {
 	for {
+		if c.isUpstream {
+			c.conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+		}
 		line, err := c.reader.ReadString('\n')
 		if err != nil {
-			log.Printf("%v from %v", err, c.conn.RemoteAddr())
+			log.WithFields(log.Fields{
+				"err":    err,
+				"client": c.conn.RemoteAddr(),
+			}).Warn("Failed to read from client")
+
 			c.dead <- true
 			break
 		}
@@ -48,8 +58,23 @@ func (c *client) read() {
 
 func (c *client) write() {
 	for data := range c.outgoing {
-		c.writer.WriteString(data)
-		c.writer.Flush()
+		_, err := c.writer.WriteString(data)
+		if err != nil {
+			log.WithFields(log.Fields{
+				"err":    err,
+				"client": c.conn.RemoteAddr(),
+			}).Warn("Failed to write to client")
+			continue
+		}
+
+		err = c.writer.Flush()
+		if err != nil {
+			log.WithFields(log.Fields{
+				"err":    err,
+				"client": c.conn.RemoteAddr(),
+			}).Warn("Failed to flush")
+			continue
+		}
 	}
 }
 
@@ -95,16 +120,26 @@ var retryInterval = 10 * time.Second
 func (r *Repeater) Proxy(address string) {
 	go func() {
 		for {
-			log.Printf("Dialing %v", address)
+			log.WithFields(log.Fields{
+				"upstream": address,
+			}).Info("Dialing upstream")
+
 			c, err := net.Dial("tcp", address)
 			if err != nil {
-				log.Println(err)
-				log.Printf("Sleeping %v before retry", retryInterval)
+				log.WithFields(log.Fields{
+					"upstream": address,
+					"err":      err,
+				}).Error("Error dialing upstream")
+
+				log.WithFields(log.Fields{
+					"upstream": address,
+					"sleep":    retryInterval,
+				}).Error("Sleeping before retrying upstream")
+
 				time.Sleep(retryInterval)
 				continue
 			}
 			r.upstreamJoins <- c
-			log.Printf("Connected to %v", address)
 			_ = <-r.upstreamFault
 		}
 	}()
@@ -115,16 +150,26 @@ func (r *Repeater) Proxy(address string) {
 // any messages received to.
 func (r *Repeater) ListenAndAccept(address string) {
 	l, err := net.Listen("tcp", address)
+
 	if err != nil {
-		log.Fatal(err)
+		log.WithFields(log.Fields{
+			"address": address,
+			"err":     err,
+		}).Fatal("Unable to listen")
 	}
 	defer l.Close()
 
-	log.Printf("Relaying data to %v", l.Addr().String())
+	log.WithFields(log.Fields{
+		"address": l.Addr(),
+	}).Info("Listening for clients")
+
 	for {
 		conn, err := l.Accept()
 		if err != nil {
-			log.Println(err)
+			log.WithFields(log.Fields{
+				"err":     err,
+				"address": l.Addr(),
+			}).Error("Unable to accept client")
 			continue
 		}
 		r.relayJoins <- conn
@@ -137,8 +182,13 @@ func (r *Repeater) broadcast(data string) {
 	}
 }
 
-func (r *Repeater) join(conn net.Conn, clients map[string]*client, triggerUpstreamFault bool) {
-	c := newClient(conn)
+func (r *Repeater) join(conn net.Conn, clients map[string]*client, isUpstream bool) {
+	log.WithFields(log.Fields{
+		"client":     conn.RemoteAddr(),
+		"isUpstream": isUpstream,
+	}).Info("Creating client")
+
+	c := newClient(conn, isUpstream)
 	clients[conn.RemoteAddr().String()] = c
 	go func() {
 		for {
@@ -146,9 +196,14 @@ func (r *Repeater) join(conn net.Conn, clients map[string]*client, triggerUpstre
 			case inc := <-c.incoming:
 				r.incoming <- inc
 			case _ = <-c.dead:
+				log.WithFields(log.Fields{
+					"client":     c.conn.RemoteAddr(),
+					"isUpstream": isUpstream,
+				}).Info("Dead client")
+
 				deadRemote := c.conn.RemoteAddr().String()
 				delete(clients, deadRemote)
-				if triggerUpstreamFault {
+				if isUpstream {
 					r.upstreamFault <- true
 				}
 			}
