@@ -81,7 +81,8 @@ func (c *client) write() {
 				"err":    err,
 				"client": c.conn.RemoteAddr(),
 			}).Warn("Failed to write to client")
-			continue
+			c.dead <- true
+			break
 		}
 
 		err = c.writer.Flush()
@@ -90,7 +91,8 @@ func (c *client) write() {
 				"err":    err,
 				"client": c.conn.RemoteAddr(),
 			}).Warn("Failed to flush")
-			continue
+			c.dead <- true
+			break
 		}
 	}
 }
