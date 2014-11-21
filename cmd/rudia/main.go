@@ -9,8 +9,8 @@ import (
 )
 
 var relayPort = flag.String("port", "32779", "TCP port to relay to")
-var idleTimeout = flag.Int("idle", 60, "Idle timeout in seconds before a connection is considered dead")
-var retryInterval = flag.Int("retry", 60, "Retry interval in seconds for attempting to reconnect")
+var idleTimeout = flag.Int("idle", 10, "Idle timeout in seconds before a connection is considered dead")
+var retryInterval = flag.Int("retry", 10, "Retry interval in seconds for attempting to reconnect")
 
 func init() {
 	log.SetLevel(log.DebugLevel)
