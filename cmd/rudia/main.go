@@ -2,6 +2,8 @@ package main
 
 import (
 	"flag"
+	"os"
+	"os/signal"
 	"time"
 
 	log "github.com/Sirupsen/logrus"
@@ -30,5 +32,11 @@ func main() {
 		r.Proxy(arg)
 	}
 
-	r.ListenAndAccept(":" + *relayPort)
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, os.Interrupt)
+
+	go r.ListenAndAccept(":" + *relayPort)
+
+	<-interrupt
+	r.Shutdown()
 }
