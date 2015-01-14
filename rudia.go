@@ -252,7 +252,10 @@ func (r *Repeater) broadcast(data string) {
 	r.clientsLock.RLock()
 	defer r.clientsLock.RUnlock()
 	for _, c := range r.clients {
-		c.messagesToWrite <- data
+		select {
+		case c.messagesToWrite <- data:
+		default:
+		}
 	}
 }
 
