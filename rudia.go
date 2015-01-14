@@ -5,6 +5,7 @@ package rudia
 import (
 	"bufio"
 	"net"
+	"sync"
 	"time"
 
 	log "github.com/Sirupsen/logrus"
@@ -122,7 +123,9 @@ type RepeaterOptions struct {
 // it receives to all connected clients.
 type Repeater struct {
 	listener        net.Listener
+	clientsLock     sync.RWMutex
 	clients         map[string]*client
+	upstreamsLock   sync.RWMutex
 	upstreams       map[string]*upstream
 	readMessages    chan string
 	messagesToWrite chan string
@@ -185,15 +188,19 @@ func (r *Repeater) Proxy(address string) {
 // any messages received to.
 func (r *Repeater) ListenAndAccept(address string) {
 	defer func() {
+		r.clientsLock.Lock()
 		for k, c := range r.clients {
 			c.shutdown()
 			delete(r.clients, k)
 		}
+		r.clientsLock.Unlock()
 
+		r.upstreamsLock.Lock()
 		for k, u := range r.upstreams {
 			u.shutdown()
 			delete(r.upstreams, k)
 		}
+		r.upstreamsLock.Unlock()
 
 		r.cleanupComplete <- true
 	}()
@@ -242,6 +249,8 @@ func (r *Repeater) Shutdown() {
 }
 
 func (r *Repeater) broadcast(data string) {
+	r.clientsLock.RLock()
+	defer r.clientsLock.RUnlock()
 	for _, c := range r.clients {
 		c.messagesToWrite <- data
 	}
@@ -253,7 +262,9 @@ func (r *Repeater) joinUpstream(conn net.Conn, fault chan bool) {
 	}).Info("Creating upstream")
 
 	u := newUpstream(conn, r.options.IdleTimeout)
+	r.upstreamsLock.Lock()
 	r.upstreams[conn.RemoteAddr().String()] = u
+	r.upstreamsLock.Unlock()
 	go func() {
 		for {
 			select {
@@ -265,7 +276,9 @@ func (r *Repeater) joinUpstream(conn net.Conn, fault chan bool) {
 				}).Warn("Dead upstream")
 
 				deadRemote := u.conn.RemoteAddr().String()
+				r.upstreamsLock.Lock()
 				delete(r.upstreams, deadRemote)
+				r.upstreamsLock.Unlock()
 				fault <- true
 			}
 		}
@@ -278,14 +291,18 @@ func (r *Repeater) joinClient(conn net.Conn) {
 	}).Info("Creating client")
 
 	c := newClient(conn)
+	r.clientsLock.Lock()
 	r.clients[conn.RemoteAddr().String()] = c
+	r.clientsLock.Unlock()
 	go func() {
 		for {
 			select {
 			case _ = <-c.dead:
 				deadRemote := c.conn.RemoteAddr().String()
+				r.clientsLock.Lock()
 				r.clients[deadRemote].shutdown()
 				delete(r.clients, deadRemote)
+				r.clientsLock.Unlock()
 			}
 		}
 	}()
