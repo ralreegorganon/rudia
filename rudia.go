@@ -122,29 +122,34 @@ type RepeaterOptions struct {
 // A Repeater connects to an upstream TCP endpoint and relays the messages
 // it receives to all connected clients.
 type Repeater struct {
-	listener        net.Listener
-	clientsLock     sync.RWMutex
-	clients         map[string]*client
-	upstreamsLock   sync.RWMutex
-	upstreams       map[string]*upstream
-	readMessages    chan string
-	messagesToWrite chan string
-	options         *RepeaterOptions
-	done            chan bool
-	cleanupComplete chan bool
+	clientListener          net.Listener
+	clientsLock             sync.RWMutex
+	clients                 map[string]*client
+	clientsDone             chan bool
+	clientCleanupComplete   chan bool
+	upstreamListener        net.Listener
+	upstreamsLock           sync.RWMutex
+	upstreams               map[string]*upstream
+	upstreamsDone           chan bool
+	upstreamCleanupComplete chan bool
+	readMessages            chan string
+	messagesToWrite         chan string
+	options                 *RepeaterOptions
 }
 
 // NewRepeater creates a new Repeater and starts listening for client
 // connections.
 func NewRepeater(options *RepeaterOptions) *Repeater {
 	r := &Repeater{
-		clients:         make(map[string]*client),
-		upstreams:       make(map[string]*upstream),
-		readMessages:    make(chan string, 1),
-		messagesToWrite: make(chan string, 1),
-		options:         options,
-		done:            make(chan bool, 1),
-		cleanupComplete: make(chan bool, 1),
+		clients:                 make(map[string]*client),
+		upstreams:               make(map[string]*upstream),
+		readMessages:            make(chan string, 1),
+		messagesToWrite:         make(chan string, 1),
+		options:                 options,
+		clientsDone:             make(chan bool, 1),
+		upstreamsDone:           make(chan bool, 1),
+		clientCleanupComplete:   make(chan bool, 1),
+		upstreamCleanupComplete: make(chan bool, 1),
 	}
 	r.listen()
 	return r
@@ -183,10 +188,10 @@ func (r *Repeater) Proxy(address string) {
 	}()
 }
 
-// ListenAndAccept listens to the specified adddress for new TCP clients
+// ListenAndAcceptClients listens to the specified adddress for new TCP clients
 // and upon successful connect, adds them to the pool of clients to relay
 // any messages received to.
-func (r *Repeater) ListenAndAccept(address string) {
+func (r *Repeater) ListenAndAcceptClients(address string) {
 	defer func() {
 		r.clientsLock.Lock()
 		for k, c := range r.clients {
@@ -195,14 +200,7 @@ func (r *Repeater) ListenAndAccept(address string) {
 		}
 		r.clientsLock.Unlock()
 
-		r.upstreamsLock.Lock()
-		for k, u := range r.upstreams {
-			u.shutdown()
-			delete(r.upstreams, k)
-		}
-		r.upstreamsLock.Unlock()
-
-		r.cleanupComplete <- true
+		r.clientCleanupComplete <- true
 	}()
 
 	l, err := net.Listen("tcp", address)
@@ -214,22 +212,22 @@ func (r *Repeater) ListenAndAccept(address string) {
 		}).Fatal("Unable to listen")
 	}
 	defer l.Close()
-	r.listener = l
+	r.clientListener = l
 
 	log.WithFields(log.Fields{
-		"address": r.listener.Addr(),
+		"address": r.clientListener.Addr(),
 	}).Info("Listening for clients")
 
 	for {
-		conn, err := r.listener.Accept()
+		conn, err := r.clientListener.Accept()
 		if err != nil {
 			select {
-			case <-r.done:
+			case <-r.clientsDone:
 				return
 			default:
 				log.WithFields(log.Fields{
 					"err":     err,
-					"address": r.listener.Addr(),
+					"address": r.clientListener.Addr(),
 				}).Error("Unable to accept client")
 				continue
 			}
@@ -239,13 +237,67 @@ func (r *Repeater) ListenAndAccept(address string) {
 	}
 }
 
+// ListenAndAcceptUpstreams listens to the specified adddress for new TCP
+// upstreams and upon successful connect, adds them to the pool of upstreams
+// to relay  any messages received from.
+func (r *Repeater) ListenAndAcceptUpstreams(address string) {
+	defer func() {
+		r.upstreamsLock.Lock()
+		for k, u := range r.upstreams {
+			u.shutdown()
+			delete(r.upstreams, k)
+		}
+		r.upstreamsLock.Unlock()
+
+		r.upstreamCleanupComplete <- true
+	}()
+
+	l, err := net.Listen("tcp", address)
+
+	if err != nil {
+		log.WithFields(log.Fields{
+			"address": address,
+			"err":     err,
+		}).Fatal("Unable to listen")
+	}
+	defer l.Close()
+	r.upstreamListener = l
+
+	log.WithFields(log.Fields{
+		"address": r.upstreamListener.Addr(),
+	}).Info("Listening for upstreams")
+
+	fault := make(chan bool)
+	for {
+		conn, err := r.upstreamListener.Accept()
+		if err != nil {
+			select {
+			case <-r.upstreamsDone:
+				return
+			default:
+				log.WithFields(log.Fields{
+					"err":     err,
+					"address": r.upstreamListener.Addr(),
+				}).Error("Unable to accept upstream")
+				continue
+			}
+		}
+
+		r.joinUpstream(conn, fault)
+		go func() { _ = <-fault }()
+	}
+}
+
 // Shutdown shuts down the repeater, stops taking new connections and
 // closing existing connections
 func (r *Repeater) Shutdown() {
 	log.Info("Shutting down repeater")
-	r.done <- true
-	r.listener.Close()
-	<-r.cleanupComplete
+	r.clientsDone <- true
+	r.upstreamsDone <- true
+	r.clientListener.Close()
+	r.upstreamListener.Close()
+	<-r.clientCleanupComplete
+	<-r.upstreamCleanupComplete
 }
 
 func (r *Repeater) broadcast(data string) {

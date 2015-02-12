@@ -10,7 +10,8 @@ import (
 	"github.com/ralreegorganon/rudia"
 )
 
-var relayPort = flag.String("port", "32779", "TCP port to relay to")
+var clientPort = flag.String("clientPort", "32779", "TCP port to listen for relay clients on")
+var upstreamPort = flag.String("upstreamPort", "32799", "TCP port to listen for upstreams on")
 var idleTimeout = flag.Int("idle", 10, "Idle timeout in seconds before a connection is considered dead")
 var retryInterval = flag.Int("retry", 10, "Retry interval in seconds for attempting to reconnect")
 
@@ -35,7 +36,8 @@ func main() {
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)
 
-	go r.ListenAndAccept(":" + *relayPort)
+	go r.ListenAndAcceptClients(":" + *clientPort)
+	go r.ListenAndAcceptUpstreams(":" + *upstreamPort)
 
 	<-interrupt
 	r.Shutdown()
