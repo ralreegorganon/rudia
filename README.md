@@ -10,11 +10,12 @@ all of the other client and upstream connections.
 ```
 Usage of rudia:
   -clientPort="32779": TCP port to listen for relay clients on
+  -proxy=[]: Upstream address to proxy, repeat the flag to proxy multiple
   -retry=10: Retry interval in seconds for attempting to reconnect
   -upstreamListenerIdleTimeout=600: Idle timeout in seconds before an upstream listener connection is considered dead
   -upstreamPort="32799": TCP port to listen for upstreams on
   -upstreamProxyIdleTimeout=10: Idle timeout in seconds before a proxied upstream connection is considered dead
 
-rudia -clientPort 9090 -upstreamPort 9091 someremoteserver:9999 someotherserver:6666
+rudia -clientPort 9090 -upstreamPort 9091 -proxy someremoteserver:9999 -proxy someotherserver:6666
 ```
 

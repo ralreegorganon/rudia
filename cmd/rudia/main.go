@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"os/signal"
 	"time"
@@ -15,9 +16,22 @@ var upstreamPort = flag.String("upstreamPort", "32799", "TCP port to listen for 
 var upstreamProxyIdleTimeout = flag.Int("upstreamProxyIdleTimeout", 10, "Idle timeout in seconds before a proxied upstream connection is considered dead")
 var upstreamListenerIdleTimeout = flag.Int("upstreamListenerIdleTimeout", 600, "Idle timeout in seconds before an upstream listener connection is considered dead")
 var retryInterval = flag.Int("retry", 10, "Retry interval in seconds for attempting to reconnect")
+var upstreamProxy upstreamProxies
+
+type upstreamProxies []string
+
+func (up *upstreamProxies) String() string {
+	return fmt.Sprint(*up)
+}
+
+func (up *upstreamProxies) Set(value string) error {
+	*up = append(*up, value)
+	return nil
+}
 
 func init() {
 	log.SetLevel(log.DebugLevel)
+	flag.Var(&upstreamProxy, "proxy", "Upstream address to proxy, repeat the flag to proxy multiple")
 }
 
 func main() {
@@ -31,7 +45,7 @@ func main() {
 
 	r := rudia.NewRepeater(ro)
 
-	for _, arg := range flag.Args() {
+	for _, arg := range upstreamProxy {
 		r.Proxy(arg)
 	}
 
