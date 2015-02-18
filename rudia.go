@@ -115,8 +115,9 @@ func (c *client) shutdown() {
 // RepeaterOptions provides configuration options for controlling the
 // behavior of the Repeater.
 type RepeaterOptions struct {
-	RetryInterval time.Duration
-	IdleTimeout   time.Duration
+	RetryInterval               time.Duration
+	UpstreamProxyIdleTimeout    time.Duration
+	UpstreamListenerIdleTimeout time.Duration
 }
 
 // A Repeater connects to an upstream TCP endpoint and relays the messages
@@ -182,7 +183,7 @@ func (r *Repeater) Proxy(address string) {
 				time.Sleep(r.options.RetryInterval)
 				continue
 			}
-			r.joinUpstream(conn, fault)
+			r.joinUpstream(conn, fault, false)
 			_ = <-fault
 		}
 	}()
@@ -283,7 +284,7 @@ func (r *Repeater) ListenAndAcceptUpstreams(address string) {
 			}
 		}
 
-		r.joinUpstream(conn, fault)
+		r.joinUpstream(conn, fault, true)
 		go func() { _ = <-fault }()
 	}
 }
@@ -311,12 +312,19 @@ func (r *Repeater) broadcast(data string) {
 	}
 }
 
-func (r *Repeater) joinUpstream(conn net.Conn, fault chan bool) {
+func (r *Repeater) joinUpstream(conn net.Conn, fault chan bool, isListener bool) {
 	log.WithFields(log.Fields{
 		"upstream": conn.RemoteAddr(),
 	}).Info("Creating upstream")
 
-	u := newUpstream(conn, r.options.IdleTimeout)
+	var idleTimeout time.Duration
+	if isListener {
+		idleTimeout = r.options.UpstreamProxyIdleTimeout
+	} else {
+		idleTimeout = r.options.UpstreamListenerIdleTimeout
+	}
+
+	u := newUpstream(conn, idleTimeout)
 	r.upstreamsLock.Lock()
 	r.upstreams[conn.RemoteAddr().String()] = u
 	r.upstreamsLock.Unlock()
@@ -329,6 +337,8 @@ func (r *Repeater) joinUpstream(conn net.Conn, fault chan bool) {
 				log.WithFields(log.Fields{
 					"upstream": u.conn.RemoteAddr(),
 				}).Warn("Dead upstream")
+
+				u.shutdown()
 
 				deadRemote := u.conn.RemoteAddr().String()
 				r.upstreamsLock.Lock()
