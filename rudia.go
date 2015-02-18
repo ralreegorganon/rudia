@@ -189,6 +189,39 @@ func (r *Repeater) Proxy(address string) {
 	}()
 }
 
+// Push connects to the specified TCP address and relays all received
+// messages from upstreams to it. If the connection to the specified
+// address fails, an attempt will be made to reconnect. This will repeat
+// until the program exits.
+func (r *Repeater) Push(address string) {
+	go func() {
+		fault := make(chan bool)
+		for {
+			log.WithFields(log.Fields{
+				"client": address,
+			}).Info("Dialing client")
+
+			conn, err := net.Dial("tcp", address)
+			if err != nil {
+				log.WithFields(log.Fields{
+					"client": address,
+					"err":    err,
+				}).Error("Error dialing client")
+
+				log.WithFields(log.Fields{
+					"client": address,
+					"sleep":  r.options.RetryInterval,
+				}).Info("Sleeping before retrying client")
+
+				time.Sleep(r.options.RetryInterval)
+				continue
+			}
+			r.joinClient(conn, fault)
+			_ = <-fault
+		}
+	}()
+}
+
 // ListenAndAcceptClients listens to the specified adddress for new TCP clients
 // and upon successful connect, adds them to the pool of clients to relay
 // any messages received to.
@@ -220,6 +253,7 @@ func (r *Repeater) ListenAndAcceptClients(address string) {
 	}).Info("Listening for clients")
 
 	for {
+		fault := make(chan bool)
 		conn, err := r.clientListener.Accept()
 		if err != nil {
 			select {
@@ -234,7 +268,9 @@ func (r *Repeater) ListenAndAcceptClients(address string) {
 			}
 		}
 
-		r.joinClient(conn)
+		r.joinClient(conn, fault)
+		go func() { _ = <-fault }()
+
 	}
 }
 
@@ -268,8 +304,8 @@ func (r *Repeater) ListenAndAcceptUpstreams(address string) {
 		"address": r.upstreamListener.Addr(),
 	}).Info("Listening for upstreams")
 
-	fault := make(chan bool)
 	for {
+		fault := make(chan bool)
 		conn, err := r.upstreamListener.Accept()
 		if err != nil {
 			select {
@@ -319,9 +355,9 @@ func (r *Repeater) joinUpstream(conn net.Conn, fault chan bool, isListener bool)
 
 	var idleTimeout time.Duration
 	if isListener {
-		idleTimeout = r.options.UpstreamProxyIdleTimeout
-	} else {
 		idleTimeout = r.options.UpstreamListenerIdleTimeout
+	} else {
+		idleTimeout = r.options.UpstreamProxyIdleTimeout
 	}
 
 	u := newUpstream(conn, idleTimeout)
@@ -350,7 +386,7 @@ func (r *Repeater) joinUpstream(conn net.Conn, fault chan bool, isListener bool)
 	}()
 }
 
-func (r *Repeater) joinClient(conn net.Conn) {
+func (r *Repeater) joinClient(conn net.Conn, fault chan bool) {
 	log.WithFields(log.Fields{
 		"client": conn.RemoteAddr(),
 	}).Info("Creating client")
@@ -368,6 +404,7 @@ func (r *Repeater) joinClient(conn net.Conn) {
 				r.clients[deadRemote].shutdown()
 				delete(r.clients, deadRemote)
 				r.clientsLock.Unlock()
+				fault <- true
 			}
 		}
 	}()
