@@ -1,10 +1,12 @@
 # rudia
 
-rudia is a simple application that will both connect to upstream TCP endpoints 
-and accept connections from upstream TCP clients, and relay the messages read
-to a second local TCP endpoint which accepts many connections. If an upstream 
-connection is severed, the application will attempt to reconnect while maintaining 
-all of the other client and upstream connections. 
+rudia is a simple application that will both connect to upstream TCP listener 
+endpoints and accept connections from upstream TCP clients, and then relay
+the messages read to a second local TCP listener endpoint which accepts many
+connections and any number of client listeners. If connections that were 
+explictly made are severed (e.g. to upstream or client listeners), the 
+application will attempt to reconnect while maintaining all of the other
+client and upstream connections. 
 
 #### Example
 ```
@@ -18,4 +20,3 @@ Usage of rudia:
 
 rudia -clientPort 9090 -upstreamPort 9091 -proxy someremoteserver:9999 -proxy someotherserver:6666
 ```
-
