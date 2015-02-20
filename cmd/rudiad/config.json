@@ -1,0 +1,17 @@
+{
+    "relays": [
+        {
+            "clientListenerPort": 32779,
+            "upstreamListenerPort": 32799,
+            "proxy": [
+                "localhost:32778"
+            ],
+            "push": [
+                "localhost:32788"
+            ],
+            "retryInterval": 10,
+            "upstreamListenerIdleTimeout": 600,
+            "upstreamProxyIdleTimeout": 10
+        }
+    ]
+}
