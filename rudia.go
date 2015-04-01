@@ -12,7 +12,7 @@ import (
 )
 
 type upstream struct {
-	readMessages chan string
+	readMessages chan []byte
 	dead         chan bool
 	conn         net.Conn
 	reader       *bufio.Reader
@@ -22,7 +22,7 @@ type upstream struct {
 func newUpstream(conn net.Conn, idleTimeout time.Duration) *upstream {
 	r := bufio.NewReader(conn)
 	u := &upstream{
-		readMessages: make(chan string, 1000),
+		readMessages: make(chan []byte, 1000),
 		dead:         make(chan bool),
 		conn:         conn,
 		reader:       r,
@@ -37,7 +37,7 @@ func newUpstream(conn net.Conn, idleTimeout time.Duration) *upstream {
 func (u *upstream) read() {
 	for {
 		u.conn.SetReadDeadline(time.Now().Add(u.idleTimeout))
-		line, err := u.reader.ReadString('\n')
+		line, err := u.reader.ReadBytes('\n')
 		if err != nil {
 			log.WithFields(log.Fields{
 				"err":      err,
@@ -60,7 +60,7 @@ func (u *upstream) shutdown() {
 }
 
 type client struct {
-	messagesToWrite chan string
+	messagesToWrite chan []byte
 	dead            chan bool
 	conn            net.Conn
 	writer          *bufio.Writer
@@ -70,7 +70,7 @@ type client struct {
 func newClient(conn net.Conn) *client {
 	w := bufio.NewWriter(conn)
 	c := &client{
-		messagesToWrite: make(chan string, 1000),
+		messagesToWrite: make(chan []byte, 1000),
 		dead:            make(chan bool),
 		conn:            conn,
 		writer:          w,
@@ -83,7 +83,7 @@ func newClient(conn net.Conn) *client {
 
 func (c *client) write() {
 	for data := range c.messagesToWrite {
-		_, err := c.writer.WriteString(data)
+		_, err := c.writer.Write(data)
 		if err != nil {
 			log.WithFields(log.Fields{
 				"err":    err,
@@ -133,8 +133,8 @@ type Repeater struct {
 	upstreams               map[string]*upstream
 	upstreamsDone           chan bool
 	upstreamCleanupComplete chan bool
-	readMessages            chan string
-	messagesToWrite         chan string
+	readMessages            chan []byte
+	messagesToWrite         chan []byte
 	options                 *RepeaterOptions
 }
 
@@ -144,8 +144,8 @@ func NewRepeater(options *RepeaterOptions) *Repeater {
 	r := &Repeater{
 		clients:                 make(map[string]*client),
 		upstreams:               make(map[string]*upstream),
-		readMessages:            make(chan string, 1000),
-		messagesToWrite:         make(chan string, 1000),
+		readMessages:            make(chan []byte, 1000),
+		messagesToWrite:         make(chan []byte, 1000),
 		options:                 options,
 		clientsDone:             make(chan bool, 1),
 		upstreamsDone:           make(chan bool, 1),
@@ -337,7 +337,7 @@ func (r *Repeater) Shutdown() {
 	<-r.upstreamCleanupComplete
 }
 
-func (r *Repeater) broadcast(data string) {
+func (r *Repeater) broadcast(data []byte) {
 	r.clientsLock.RLock()
 	defer r.clientsLock.RUnlock()
 	for _, c := range r.clients {
