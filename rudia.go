@@ -22,7 +22,7 @@ type upstream struct {
 func newUpstream(conn net.Conn, idleTimeout time.Duration) *upstream {
 	r := bufio.NewReader(conn)
 	u := &upstream{
-		readMessages: make(chan string, 1),
+		readMessages: make(chan string, 1000),
 		dead:         make(chan bool),
 		conn:         conn,
 		reader:       r,
@@ -70,7 +70,7 @@ type client struct {
 func newClient(conn net.Conn) *client {
 	w := bufio.NewWriter(conn)
 	c := &client{
-		messagesToWrite: make(chan string, 1),
+		messagesToWrite: make(chan string, 1000),
 		dead:            make(chan bool),
 		conn:            conn,
 		writer:          w,
@@ -144,8 +144,8 @@ func NewRepeater(options *RepeaterOptions) *Repeater {
 	r := &Repeater{
 		clients:                 make(map[string]*client),
 		upstreams:               make(map[string]*upstream),
-		readMessages:            make(chan string, 1),
-		messagesToWrite:         make(chan string, 1),
+		readMessages:            make(chan string, 1000),
+		messagesToWrite:         make(chan string, 1000),
 		options:                 options,
 		clientsDone:             make(chan bool, 1),
 		upstreamsDone:           make(chan bool, 1),
