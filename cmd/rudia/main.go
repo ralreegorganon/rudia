@@ -7,8 +7,8 @@ import (
 	"os/signal"
 	"time"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/ralreegorganon/rudia"
+	log "github.com/sirupsen/logrus"
 )
 
 var clientListenerPort = flag.String("clientListenerPort", "32779", "TCP port to listen for relay clients on")

@@ -9,10 +9,10 @@ import (
 	"strconv"
 	"time"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/kardianos/osext"
 	"github.com/kardianos/service"
 	"github.com/ralreegorganon/rudia"
+	log "github.com/sirupsen/logrus"
 	lumberjack "gopkg.in/natefinch/lumberjack.v2"
 )
 
