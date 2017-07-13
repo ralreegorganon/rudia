@@ -331,10 +331,14 @@ func (r *Repeater) Shutdown() {
 	log.Info("Shutting down repeater")
 	r.clientsDone <- true
 	r.upstreamsDone <- true
-	r.clientListener.Close()
-	r.upstreamListener.Close()
-	<-r.clientCleanupComplete
-	<-r.upstreamCleanupComplete
+	if r.clientListener != nil {
+		r.clientListener.Close()
+		<-r.clientCleanupComplete
+	}
+	if r.upstreamListener != nil {
+		r.upstreamListener.Close()
+		<-r.upstreamCleanupComplete
+	}
 }
 
 func (r *Repeater) broadcast(data []byte) {
