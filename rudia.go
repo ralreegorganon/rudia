@@ -136,6 +136,8 @@ type Repeater struct {
 	readMessages            chan []byte
 	messagesToWrite         chan []byte
 	options                 *RepeaterOptions
+	stopChannelsLock        sync.RWMutex
+	stopChannels            map[string]chan bool
 }
 
 // NewRepeater creates a new Repeater and starts listening for client
@@ -151,6 +153,7 @@ func NewRepeater(options *RepeaterOptions) *Repeater {
 		upstreamsDone:           make(chan bool, 1),
 		clientCleanupComplete:   make(chan bool, 1),
 		upstreamCleanupComplete: make(chan bool, 1),
+		stopChannels:            make(map[string]chan bool),
 	}
 	r.listen()
 	return r
@@ -163,6 +166,12 @@ func NewRepeater(options *RepeaterOptions) *Repeater {
 func (r *Repeater) Proxy(address string) {
 	go func() {
 		fault := make(chan bool)
+		stop := make(chan bool)
+
+		r.stopChannelsLock.Lock()
+		r.stopChannels[address] = stop
+		r.stopChannelsLock.Unlock()
+
 		for {
 			log.WithFields(log.Fields{
 				"upstream": address,
@@ -184,7 +193,16 @@ func (r *Repeater) Proxy(address string) {
 				continue
 			}
 			r.joinUpstream(conn, fault, false)
-			_ = <-fault
+			select {
+			case <-fault:
+				continue
+			case <-stop:
+				r.upstreamsLock.Lock()
+				u := r.upstreams[conn.RemoteAddr().String()]
+				r.upstreamsLock.Unlock()
+				u.dead <- true
+				return
+			}
 		}
 	}()
 }
@@ -196,6 +214,12 @@ func (r *Repeater) Proxy(address string) {
 func (r *Repeater) Push(address string) {
 	go func() {
 		fault := make(chan bool)
+		stop := make(chan bool)
+
+		r.stopChannelsLock.Lock()
+		r.stopChannels[address] = stop
+		r.stopChannelsLock.Unlock()
+
 		for {
 			log.WithFields(log.Fields{
 				"client": address,
@@ -217,9 +241,26 @@ func (r *Repeater) Push(address string) {
 				continue
 			}
 			r.joinClient(conn, fault)
-			_ = <-fault
+			select {
+			case <-fault:
+				continue
+			case <-stop:
+				r.clientsLock.Lock()
+				c := r.clients[conn.RemoteAddr().String()]
+				r.clientsLock.Unlock()
+				c.dead <- true
+				return
+			}
 		}
 	}()
+}
+
+// Stop terminates the proxy or push for the specified address.
+func (r *Repeater) Stop(address string) {
+	r.stopChannelsLock.Lock()
+	r.stopChannels[address] <- true
+	delete(r.stopChannels, address)
+	r.stopChannelsLock.Unlock()
 }
 
 // ListenAndAcceptClients listens to the specified adddress for new TCP clients
@@ -270,13 +311,12 @@ func (r *Repeater) ListenAndAcceptClients(address string) {
 
 		r.joinClient(conn, fault)
 		go func() { _ = <-fault }()
-
 	}
 }
 
 // ListenAndAcceptUpstreams listens to the specified adddress for new TCP
 // upstreams and upon successful connect, adds them to the pool of upstreams
-// to relay  any messages received from.
+// to relay any messages received from.
 func (r *Repeater) ListenAndAcceptUpstreams(address string) {
 	defer func() {
 		r.upstreamsLock.Lock()
